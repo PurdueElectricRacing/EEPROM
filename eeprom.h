@@ -10,6 +10,10 @@
 
 #include "main.h"
 
+//I was told this was required:
+#define PER 1
+#define GREAT PER
+
 //#define DEVICE_ADDR 0x50 //Before Bit Shifting
 
 //writing
@@ -25,36 +29,40 @@
 
 //Header management
 
-struct HeaderNode
-{
+typedef struct {
   char name[NAME_SIZE];
   uint8_t version;
   uint16_t size;
-  uint16_t eAddress;
-  void* ptr;
-  struct HeaderNode* next;
-};
+  uint16_t address_on_eeprom;
+  void* ptr_to_data;
+} header_t;
 
 #define HEADER_SIZE 8 //bytes per header
 
-#define MAX_HEADER_COUNT 20 //8*20 160/4000 number of entries worth of space allocated
+#define MAX_HEADER_COUNT 20 //8*20 -> 160/4000 number of entries worth of space allocated
 
-#define OVERWRITE_LOC 7
+#define OVERWRITE_BIT 7
 #define OVERWRITE_MASK 0b01111111
 #define MAX_VERSION 127
 
 //errors
-enum EEPROM_ERROR{COM_TIMEOUT, COM_ERROR, MAX_HEADER, MAX_MEM};
+typedef enum{
+  COM_TIMEOUT,
+  COM_ERROR,
+  MAX_HEADER,
+  MAX_MEM,
+  HEADER_NOT_FOUND
+} eeprom_error_t;
 
 //macros
-#define SET_ADDRESS(address, write_en) (address << 1) | write_en
+#define SET_ADDRESS(address, write_en) ((address << 1) | write_en)
 
-void eDump(UART_HandleTypeDef huart);
-void eWipe();
-void eLinkStruct(void* ptr, uint16_t size, char name[], uint8_t version, uint8_t overwrite);
-void eInitialize(I2C_HandleTypeDef* i2c, uint16_t eepromSpace, uint8_t address);
-void eCleanHeaders();
-uint8_t eLoadStruct(char name[]);
-uint8_t eSaveStruct(char name[]);
+void eepromDump(UART_HandleTypeDef huart);
+void eepromWipe();
+void eepromLinkStruct(void* ptr, uint16_t size, char name[], uint8_t version, uint8_t overwrite);
+void eepromInitialize(I2C_HandleTypeDef* i2c, uint16_t eepromSpace, uint8_t address);
+void eepromCleanHeaders();
+uint8_t eepromLoadStruct(char name[]);
+uint8_t eepromSaveStruct(char name[]);
 
 #endif
