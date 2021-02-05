@@ -116,23 +116,9 @@ void uploadByte(uint16_t addr, uint8_t val)
 //uploads chunk ignoring page breaks
 void eUploadRaw(void *from_addr, uint16_t to_addr, uint16_t size)
 {
-  //convert type to allow copying
-  uint8_t *from = from_addr;
-
-  uint8_t *buff = malloc(size + 2);
-  //TODO: remove buffer (have two transmit calls)
-  //insert memory address
-  buff[0] = to_addr >> 8;
-  buff[1] = to_addr & 0xFF;
-
-  //copy memory from from_addr to buffer
-  for (uint16_t i = 0; i < size; i++)
-  {
-    buff[i + 2] = from[i];
-  }
-
   HAL_Delay(5);
-  ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), buff, size + 2, HAL_MAX_DELAY);
+  //ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), from_addr, size, HAL_MAX_DELAY);
+  ret = HAL_I2C_Mem_Write(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), to_addr, I2C_MEMADD_SIZE_16BIT, from_addr, size, HAL_MAX_DELAY);
 
   if (ret != HAL_OK)
   {
@@ -150,7 +136,6 @@ void eUploadRaw(void *from_addr, uint16_t to_addr, uint16_t size)
     errorFound(COM_TIMEOUT);
   }
 
-  free(buff); //TODO: don't forget this either
 }
 
 //breaks data into chunks to prevent crossing page boundary
@@ -224,6 +209,8 @@ header_t *findHeader(char name[])
 void addHeaderEntry(header_t *new_header)
 {
 
+  new_header->address_on_eeprom = eepromMalloc(new_header->size);
+
   g_numStructs += 1;
   uploadByte(0, g_numStructs); //increment struct num by 1
 
@@ -231,7 +218,6 @@ void addHeaderEntry(header_t *new_header)
   {
     errorFound(MAX_HEADER);
   }
-  new_header->address_on_eeprom = eepromMalloc(new_header->size);
 
   uploadChunk(new_header, (g_numStructs - 1) * HEADER_SIZE + 1, HEADER_SIZE);
 
@@ -391,7 +377,7 @@ the linked list is sorted by increasing
 eaddress*/
 uint16_t eepromMalloc(uint16_t size)
 {
-  if (g_numStructs > 1)
+  if (g_numStructs > 0)
   {
 //    header_t *current = g_headers;
 
@@ -413,7 +399,7 @@ uint16_t eepromMalloc(uint16_t size)
 
     if (g_eeprom_size - g_headers[g_numStructs].address_on_eeprom + g_headers[g_numStructs].size >= size)
     {
-      return g_headers[g_numStructs].address_on_eeprom + g_headers[g_numStructs].size;
+      return g_headers[g_numStructs - 1].address_on_eeprom + g_headers[g_numStructs - 1].size;
     }
 
     errorFound(MAX_MEM);
@@ -488,7 +474,7 @@ void eepromInitialize(I2C_HandleTypeDef *i2c, uint16_t eepromSpace, uint8_t addr
   loadHeaderEntries();
   sortHeaders();
 
-  //eWipe();
+  //eepromWipe();
 }
 
 //loads struct from mem, returns 1 if unknown struct
