@@ -59,7 +59,7 @@ typedef enum{
 
 void eepromDump(UART_HandleTypeDef huart);
 void eepromWipe();
-void eepromLinkStruct(void* ptr, uint16_t size, char name[], uint8_t version, uint8_t overwrite);
+uint8_t eepromLinkStruct(void* ptr, uint16_t size, char name[], uint8_t version, uint8_t overwrite);
 void eepromInitialize(I2C_HandleTypeDef* i2c, uint16_t eepromSpace, uint8_t address);
 void eepromCleanHeaders();
 uint8_t eepromLoadStruct(char name[]);

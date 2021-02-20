@@ -249,8 +249,11 @@ void updateHeaderEntry(header_t *header)
 }
 
 //links struct ptr with a header from eeprom, overwrite protect active high
-void eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version, uint8_t overwrite_protection)
+//returns 1 if it was not found to currently exist
+uint8_t eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version, uint8_t overwrite_protection)
 {
+  uint8_t is_new_struct = 0;
+
   header_t *a_header = NULL;
 
   a_header = findHeader(name);
@@ -275,6 +278,8 @@ void eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version, ui
   if (a_header == NULL)
   {
     //struct not in eeprom in any form
+    is_new_struct = 1;
+
     a_header = &g_headers[g_numStructs]; //0 based list, no +1
     strcpy(a_header->name, name);
 
@@ -321,6 +326,8 @@ void eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version, ui
     //struct info matches that in eeprom
     a_header->ptr_to_data = ptr; //link :D
   }
+
+  return is_new_struct;
 }
 
 //populate linked list with header info from eeprom
