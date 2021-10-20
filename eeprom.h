@@ -8,7 +8,7 @@
 #ifndef EEPROM_H_
 #define EEPROM_H_
 
-#include "main.h"
+#include "common/phal_L4/i2c/i2c.h"
 
 //I was told this was required:
 #define PER 1
@@ -45,6 +45,8 @@ typedef struct {
 #define OVERWRITE_MASK 0b01111111
 #define MAX_VERSION 127
 
+#define E_DELAY 5 //ms (time delay between I2C operations)
+
 //errors
 typedef enum{
   COM_TIMEOUT,
@@ -57,12 +59,56 @@ typedef enum{
 //macros
 #define SET_ADDRESS(address, write_en) ((address << 1) | write_en)
 
-void eepromDump(UART_HandleTypeDef huart);
+//void eepromDump(UART_HandleTypeDef huart);
+/**
+ * @brief Set all addresses in eeprom to zero
+ */
 void eepromWipe();
+
+/**
+ * @brief           links a data structure in memory to one in eeprom
+ *                  if not existing, initializes one in eeprom memory
+ * 
+ * @param ptr       pointer to location of the data
+ * @param size      size in bytes of the data
+ * @param name      3 character variable name
+ * @param version   version number of the data (change when structure changed!) 
+ * @param overwrite set to 1 to prevent clean headers from removing if not linked
+ * @return uint8_t  returns 1 if the structure was not found to exist, signifying
+ *                  the creation of a new one
+ */
 uint8_t eepromLinkStruct(void* ptr, uint16_t size, char name[], uint8_t version, uint8_t overwrite);
-void eepromInitialize(I2C_HandleTypeDef* i2c, uint16_t eepromSpace, uint8_t address);
+
+/**
+ * @brief             Used to initialize the eeprom, loads existing header information
+ *                    off of the eeprom
+ * 
+ * @param eepromSpace byte capacity of eeprom
+ * @param address     I2C address
+ */
+void eepromInitialize(uint16_t eepromSpace, uint8_t address);
+
+/**
+ * @brief call after linking structs, removes old structs from memory with 
+ *        overwrite protection turned off
+ */
 void eepromCleanHeaders();
+
+/**
+ * @brief          Loads what data was in eeprom and writes it to the 
+ *                 linked address
+ * 
+ * @param name     3 character data label 
+ * @return uint8_t returns 1 if the label is unrecognized 
+ */
 uint8_t eepromLoadStruct(char name[]);
+
+/**
+ * @brief          Writes current data at the linked address to eeprom
+ * 
+ * @param name     3 character data label 
+ * @return uint8_t returns 1 if the label is unrecognized 
+ */
 uint8_t eepromSaveStruct(char name[]);
 
 #endif

@@ -1,21 +1,15 @@
-#include "eeprom.h"
+#include "common/eeprom/eeprom.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-
-uint8_t g_write_data[4];
-HAL_StatusTypeDef ret;
 
 header_t g_headers[MAX_HEADER_COUNT] = {NULL};
 
 uint8_t g_numStructs; //number of entries in header
 
-I2C_HandleTypeDef *i2c01;
 uint16_t g_eeprom_size;
 uint8_t g_device_addr;
 
-void setAddress(uint16_t addr);
-uint8_t readByte(uint16_t addr);
 void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size);
 void uploadByte(uint16_t addr, uint8_t val);
 void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size);
@@ -30,111 +24,80 @@ void splitVersion(uint8_t *version, uint8_t *overwrite);
 void combineVersion(uint8_t *version, uint8_t *overwrite);
 void errorFound(eeprom_error_t error);
 void loadHeaderEntries();
+void delay(uint8_t ms);
 
-//sets 'cursor' in eeprom
-void setAddress(uint16_t addr)
-{
-  uint8_t timeout = 0;
-
-  g_write_data[0] = addr >> 8;
-  g_write_data[1] = addr & 0xFF;
-  HAL_Delay(10);
-  ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), g_write_data, 2, HAL_MAX_DELAY);
-
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-
-  for (timeout = 0; i2c01->State != HAL_I2C_STATE_READY && timeout < WRITE_TIMEOUT; timeout++)
-  {
-    //Wait for the send to stop
-  }
-
-  if (timeout > WRITE_TIMEOUT)
-  {
-    errorFound(COM_TIMEOUT);
-  }
-}
-
-//reads single byte
-uint8_t readByte(uint16_t addr)
-{
-  uint8_t value;
-
-  setAddress(addr);
-
-  ret = HAL_I2C_Master_Receive(i2c01, SET_ADDRESS(g_device_addr, READ_ENABLE), &value, 1, HAL_MAX_DELAY);
-
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-
-  HAL_Delay(5);
-  return value;
-}
 
 //reads chunk of data
 void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
 {
-  setAddress(from_addr);
-  HAL_Delay(5);
-  ret = HAL_I2C_Master_Receive(i2c01, SET_ADDRESS(g_device_addr, READ_ENABLE), to_addr, size, HAL_MAX_DELAY);
+  uint8_t ret = 0;
+  delay(E_DELAY);
 
-  if (ret != HAL_OK)
+  // set cursor
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2, PHAL_I2C_MODE_TX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(from_addr >> 8);   // High
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(from_addr & 0xFF); // Low
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
+  if (!ret) errorFound(COM_ERROR);
+
+  while(size > 0xFF) // can only receive 255 at a time
   {
-    errorFound(COM_ERROR);
+    ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, READ_ENABLE), 0xFF, PHAL_I2C_MODE_RX);
+    if (!ret) errorFound(COM_ERROR);
+    ret = PHAL_I2C_read_multi(to_addr, 0xFF);
+    if (!ret) errorFound(COM_ERROR);
+    ret = PHAL_I2C_gen_stop();
+    if (!ret) errorFound(COM_ERROR);
+    size -= 0xFF;
+    to_addr += 0xFF;
   }
+
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, READ_ENABLE), (uint8_t) size, PHAL_I2C_MODE_RX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_read_multi(to_addr, (uint8_t) size);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
+  if (!ret) errorFound(COM_ERROR);
+
 }
 
 //writes single byte
 void uploadByte(uint16_t addr, uint8_t val)
 {
-  g_write_data[0] = addr >> 8;
-  g_write_data[1] = addr & 0xFF;
-  g_write_data[2] = val;
+  uint8_t ret = 0;
+  delay(E_DELAY);
 
-  uint8_t timeout = 0;
-  HAL_Delay(5); //Was not working without a delay...
-  ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), g_write_data, 3, HAL_MAX_DELAY);
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 3, PHAL_I2C_MODE_TX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(addr >> 8);   // High Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(addr & 0xFF); // Low Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(val);         // Data
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
 
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-  for (timeout = 0; i2c01->State != HAL_I2C_STATE_READY && timeout < WRITE_TIMEOUT; timeout++)
-  {
-    //Wait for the send to stop
-  }
-  if (timeout > WRITE_TIMEOUT)
-  {
-    errorFound(COM_TIMEOUT);
-  }
 }
 
 //uploads chunk ignoring page breaks
 void eUploadRaw(void *from_addr, uint16_t to_addr, uint16_t size)
 {
-  HAL_Delay(5);
-  //ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), from_addr, size, HAL_MAX_DELAY);
-  ret = HAL_I2C_Mem_Write(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), to_addr, I2C_MEMADD_SIZE_16BIT, from_addr, size, HAL_MAX_DELAY);
+  uint8_t ret = 0;
+  delay(E_DELAY);
 
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-
-  uint8_t timeout = 0;
-  for (timeout = 0; i2c01->State != HAL_I2C_STATE_READY && timeout < WRITE_TIMEOUT; timeout++)
-  {
-    //Wait for the send to stop
-  }
-
-  if (timeout > WRITE_TIMEOUT)
-  {
-    errorFound(COM_TIMEOUT);
-  }
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2 + size, PHAL_I2C_MODE_TX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(to_addr >> 8);          // High Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(to_addr & 0xFF);        // Low Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write_multi(from_addr, size); // Data
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
+  if (!ret) errorFound(COM_ERROR);
 
 }
 
@@ -160,23 +123,25 @@ void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size)
     }
 
     eUploadRaw(from + (current_addr - to_addr), current_addr, chunkSize);
-    HAL_Delay(5);
+    // TEST: NONE
+    //HAL_Delay(5);
     current_addr += chunkSize;
     next_boundary = (current_addr / PAGE_SIZE + 1) * PAGE_SIZE;
   } while (current_addr < end_loc);
 }
 
 //transfers all values to given huart
-void eepromDump(UART_HandleTypeDef huart)
-{
-  uint8_t MSG[PAGE_SIZE + 1] = {0};
-  for (uint16_t i = 0; i < g_eeprom_size; i += PAGE_SIZE)
-  {
-    downloadChunk(i, MSG, PAGE_SIZE);
-    HAL_UART_Transmit(&huart, MSG, sizeof(MSG) - 1, 100);
-    HAL_Delay(10);
-  }
-}
+// TODO: PHAL UART Library
+// void eepromDump(UART_HandleTypeDef huart)
+// {
+//   uint8_t MSG[PAGE_SIZE + 1] = {0};
+//   for (uint16_t i = 0; i < g_eeprom_size; i += PAGE_SIZE)
+//   {
+//     downloadChunk(i, MSG, PAGE_SIZE);
+//     //HAL_UART_Transmit(&huart, MSG, sizeof(MSG) - 1, 100);
+//     HAL_Delay(10);
+//   }
+// }
 
 //Sets all addresses to 0
 void eepromWipe()
@@ -470,13 +435,14 @@ void eepromCleanHeaders()
 }
 
 //loads current header info
-void eepromInitialize(I2C_HandleTypeDef *i2c, uint16_t eepromSpace, uint8_t address)
+void eepromInitialize(uint16_t eepromSpace, uint8_t address)
 {
-  i2c01 = i2c;
+  //i2c01 = i2c;
   g_eeprom_size = eepromSpace;
   g_device_addr = address;
 
-  g_numStructs = readByte(0);
+  //TEST: g_numStructs = readByte(0);
+  downloadChunk(0x00, &g_numStructs, 1);
 
   loadHeaderEntries();
   sortHeaders();
@@ -529,6 +495,15 @@ void splitVersion(uint8_t *version, uint8_t *overwrite)
 void combineVersion(uint8_t *version, uint8_t *overwrite)
 {
   *version = *version | (*overwrite << OVERWRITE_BIT);
+}
+
+void delay(uint8_t ms)
+{
+  uint32_t ticks = (SystemCoreClock / 1000) * ms / 4;
+  for(int i = 0; i < ticks; i++)
+  {
+    __asm__("nop");
+  }
 }
 
 void errorFound(eeprom_error_t error)
