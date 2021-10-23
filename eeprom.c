@@ -3,7 +3,8 @@
 #include <string.h>
 #include <stdint.h>
 
-header_t g_headers[MAX_HEADER_COUNT] = {NULL};
+header_t g_headers[MAX_HEADER_COUNT] = {0};
+eeprom_write_status_t e_wr_stat = {.has_write_started=0, .is_write_complete=0};
 
 uint8_t g_numStructs; //number of entries in header
 
@@ -12,7 +13,8 @@ uint8_t g_device_addr;
 
 void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size);
 void uploadByte(uint16_t addr, uint8_t val);
-void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size);
+void uploadChunkBlocking(void *from_addr, uint16_t to_addr, uint16_t size);
+uint8_t uploadChunkPeriodic(void *from_addr, uint16_t to_addr, uint16_t size);
 header_t *findHeader(char name[]);
 void addHeaderEntry(header_t *newHeader);
 void updateHeaderEntry(header_t *header);
@@ -31,7 +33,6 @@ void delay(uint8_t ms);
 void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
 {
   uint8_t ret = 0;
-  delay(E_DELAY);
 
   // set cursor
   ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2, PHAL_I2C_MODE_TX);
@@ -68,8 +69,6 @@ void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
 void uploadByte(uint16_t addr, uint8_t val)
 {
   uint8_t ret = 0;
-  delay(E_DELAY);
-
   ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 3, PHAL_I2C_MODE_TX);
   if (!ret) errorFound(COM_ERROR);
   ret = PHAL_I2C_write(addr >> 8);   // High Addr
@@ -86,7 +85,6 @@ void uploadByte(uint16_t addr, uint8_t val)
 void eUploadRaw(void *from_addr, uint16_t to_addr, uint16_t size)
 {
   uint8_t ret = 0;
-  delay(E_DELAY);
 
   ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2 + size, PHAL_I2C_MODE_TX);
   if (!ret) errorFound(COM_ERROR);
@@ -102,7 +100,7 @@ void eUploadRaw(void *from_addr, uint16_t to_addr, uint16_t size)
 }
 
 //breaks data into chunks to prevent crossing page boundary
-void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size)
+void uploadChunkBlocking(void *from_addr, uint16_t to_addr, uint16_t size)
 {
   uint16_t next_boundary = (to_addr / PAGE_SIZE + 1) * PAGE_SIZE;
   uint16_t current_addr = to_addr;
@@ -122,12 +120,55 @@ void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size)
       chunkSize = next_boundary - current_addr;
     }
 
+    delay(E_DELAY);
     eUploadRaw(from + (current_addr - to_addr), current_addr, chunkSize);
-    // TEST: NONE
-    //HAL_Delay(5);
+
     current_addr += chunkSize;
     next_boundary = (current_addr / PAGE_SIZE + 1) * PAGE_SIZE;
   } while (current_addr < end_loc);
+}
+
+//breaks data into chunks to prevent crossing page boundary
+uint8_t uploadChunkPeriodic(void *from_addr, uint16_t to_addr, uint16_t size)
+{
+  if (!e_wr_stat.has_write_started)
+  {
+    e_wr_stat.has_write_started = 1;
+    e_wr_stat.is_write_complete = 0;
+    e_wr_stat.next_boundary = (to_addr / PAGE_SIZE + 1) * PAGE_SIZE;
+    e_wr_stat.current_addr = to_addr;
+    e_wr_stat.end_loc = to_addr + (size - 1);
+    e_wr_stat.from = from_addr;
+  }
+
+  uint8_t chunkSize; //number of bytes copying from mem
+
+  //send from current to boundary or end loc, whichever is less
+  if (e_wr_stat.end_loc - e_wr_stat.current_addr < 
+      e_wr_stat.next_boundary - e_wr_stat.current_addr)
+  {
+    chunkSize = e_wr_stat.end_loc - e_wr_stat.current_addr + 1;
+  }
+  else
+  {
+    chunkSize = e_wr_stat.next_boundary - e_wr_stat.current_addr;
+  }
+
+  eUploadRaw(e_wr_stat.from + (e_wr_stat.current_addr - to_addr), e_wr_stat.current_addr, chunkSize);
+
+  e_wr_stat.current_addr += chunkSize;
+  e_wr_stat.next_boundary = (e_wr_stat.current_addr / PAGE_SIZE + 1) * PAGE_SIZE;
+
+  if (e_wr_stat.current_addr < e_wr_stat.end_loc)
+  {
+    return false;
+  }
+  else
+  {
+    e_wr_stat.is_write_complete = 1;
+    e_wr_stat.has_write_started = 0;
+    return true;
+  }
 }
 
 //transfers all values to given huart
@@ -150,7 +191,7 @@ void eepromWipe()
 
   for (uint16_t i = 0; i < g_eeprom_size; i += PAGE_SIZE)
   {
-    uploadChunk(data, i, 32);
+    uploadChunkBlocking(data, i, 32);
   }
 }
 
@@ -177,6 +218,7 @@ void addHeaderEntry(header_t *new_header)
   new_header->address_on_eeprom = eepromMalloc(new_header->size);
 
   g_numStructs += 1;
+  delay(E_DELAY); // minimum 5 ms between writing
   uploadByte(0, g_numStructs); //increment struct num by 1
 
   if (g_numStructs > MAX_HEADER_COUNT)
@@ -184,7 +226,7 @@ void addHeaderEntry(header_t *new_header)
     errorFound(MAX_HEADER);
   }
 
-  uploadChunk(new_header, (g_numStructs - 1) * HEADER_SIZE + 1, HEADER_SIZE);
+  uploadChunkBlocking(new_header, (g_numStructs - 1) * HEADER_SIZE + 1, HEADER_SIZE);
 
   sortHeaders(); //added new item, put it in place
 }
@@ -205,7 +247,7 @@ void updateHeaderEntry(header_t *header)
     if (strncmp(name_found, header->name, NAME_SIZE) == 0)
     {
       //found the correct header to update
-      uploadChunk(header_loc + NAME_SIZE, i * HEADER_SIZE + 1 + NAME_SIZE, HEADER_SIZE - NAME_SIZE);
+      uploadChunkBlocking(header_loc + NAME_SIZE, i * HEADER_SIZE + 1 + NAME_SIZE, HEADER_SIZE - NAME_SIZE);
       return;
     }
   }
@@ -255,7 +297,7 @@ uint8_t eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version,
     a_header->ptr_to_data = ptr; //link :D
 
     addHeaderEntry(a_header); //update eAddress too
-    uploadChunk(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
+    uploadChunkBlocking(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
   }
   else if (a_header->size != size || a_header->version != version)
   {
@@ -277,7 +319,7 @@ uint8_t eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version,
     a_header->ptr_to_data = ptr; //link :D
 
     updateHeaderEntry(a_header);
-    uploadChunk(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
+    uploadChunkBlocking(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
   }
   else if (overwrite_previous != overwrite_protection)
   {
@@ -402,13 +444,14 @@ void removeFromEeprom(char name[])
     if (strncmp(name_buffer, name, NAME_SIZE) == 0)
     {
       // found the correct header to update
-      uploadChunk(header_buffer, i * HEADER_SIZE + 1, HEADER_SIZE);
+      uploadChunkBlocking(header_buffer, i * HEADER_SIZE + 1, HEADER_SIZE);
       i = g_numStructs; // exit loop
     }
   }
 
   // decrement num g_headers
   g_numStructs -= 1;
+  delay(E_DELAY); // minimum 5 ms delay between write cycles
   uploadByte(0, g_numStructs);
 }
 
@@ -437,11 +480,9 @@ void eepromCleanHeaders()
 //loads current header info
 void eepromInitialize(uint16_t eepromSpace, uint8_t address)
 {
-  //i2c01 = i2c;
   g_eeprom_size = eepromSpace;
   g_device_addr = address;
 
-  //TEST: g_numStructs = readByte(0);
   downloadChunk(0x00, &g_numStructs, 1);
 
   loadHeaderEntries();
@@ -468,7 +509,7 @@ uint8_t eepromLoadStruct(char name[])
 }
 
 //saves struct to mem, returns 1 if unknown struct
-uint8_t eepromSaveStruct(char name[])
+uint8_t eepromSaveStructBlocking(char name[])
 {
 
   for (int i = 0; i < g_numStructs; i++)
@@ -476,7 +517,24 @@ uint8_t eepromSaveStruct(char name[])
     if (strncmp(name, g_headers[i].name, NAME_SIZE) == 0)
     {
       //found desired node
-      uploadChunk(g_headers[i].ptr_to_data, g_headers[i].address_on_eeprom, g_headers[i].size);
+      uploadChunkBlocking(g_headers[i].ptr_to_data, g_headers[i].address_on_eeprom, g_headers[i].size);
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+//saves struct to mem, returns 1 if unknown struct, call until eeprom is_write_complete = 1
+uint8_t eepromSaveStructPeriodic(char name[])
+{
+
+  for (int i = 0; i < g_numStructs; i++)
+  {
+    if (strncmp(name, g_headers[i].name, NAME_SIZE) == 0)
+    {
+      //found desired node
+      uploadChunkPeriodic(g_headers[i].ptr_to_data, g_headers[i].address_on_eeprom, g_headers[i].size);
       return 0;
     }
   }
@@ -517,6 +575,7 @@ void errorFound(eeprom_error_t error)
   case HEADER_NOT_FOUND:
     while (PER == GREAT)
     {
+      __asm__("nop");
     }
     break;
   }

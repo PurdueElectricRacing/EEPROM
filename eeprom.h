@@ -47,6 +47,20 @@ typedef struct {
 
 #define E_DELAY 5 //ms (time delay between I2C operations)
 
+typedef struct {
+  uint32_t last_write_time;
+  uint16_t next_boundary;
+  uint16_t end_loc;
+  uint16_t current_addr;
+  uint8_t *from;
+  struct {
+    uint8_t has_write_started:1;
+    uint8_t is_write_complete:1;
+  };
+} eeprom_write_status_t;
+
+extern eeprom_write_status_t e_wr_stat; // eeprom periodic write status
+
 //errors
 typedef enum{
   COM_TIMEOUT,
@@ -104,11 +118,24 @@ void eepromCleanHeaders();
 uint8_t eepromLoadStruct(char name[]);
 
 /**
- * @brief          Writes current data at the linked address to eeprom
+ * @brief          Writes current data at the linked address to eeprom,
+ *                 blocks for 5 ms between each write command
  * 
  * @param name     3 character data label 
  * @return uint8_t returns 1 if the label is unrecognized 
  */
-uint8_t eepromSaveStruct(char name[]);
+uint8_t eepromSaveStructBlocking(char name[]);
+
+/**
+ * @brief          Writes current data at the linked address to eeprom,
+ *                 call periodically at a minimum period of 5 ms until 
+ *                 the eeprom write status is_write_complete bit is 
+ *                 set to high
+ * 
+ * @param name     3 character data label 
+ * @return uint8_t returns 1 if the label is unrecognized 
+ */
+uint8_t eepromSaveStructPeriodic(char name[]);
+
 
 #endif
