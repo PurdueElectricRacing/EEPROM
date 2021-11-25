@@ -1,24 +1,20 @@
-#include "eeprom.h"
+#include "common/eeprom/eeprom.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 
-uint8_t g_write_data[4];
-HAL_StatusTypeDef ret;
-
-header_t g_headers[MAX_HEADER_COUNT] = {NULL};
+header_t g_headers[MAX_HEADER_COUNT] = {0};
+eeprom_write_status_t e_wr_stat = {.has_write_started=0, .is_write_complete=0};
 
 uint8_t g_numStructs; //number of entries in header
 
-I2C_HandleTypeDef *i2c01;
 uint16_t g_eeprom_size;
 uint8_t g_device_addr;
 
-void setAddress(uint16_t addr);
-uint8_t readByte(uint16_t addr);
 void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size);
 void uploadByte(uint16_t addr, uint8_t val);
-void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size);
+void uploadChunkBlocking(void *from_addr, uint16_t to_addr, uint16_t size);
+uint8_t uploadChunkPeriodic(void *from_addr, uint16_t to_addr, uint16_t size);
 header_t *findHeader(char name[]);
 void addHeaderEntry(header_t *newHeader);
 void updateHeaderEntry(header_t *header);
@@ -30,116 +26,81 @@ void splitVersion(uint8_t *version, uint8_t *overwrite);
 void combineVersion(uint8_t *version, uint8_t *overwrite);
 void errorFound(eeprom_error_t error);
 void loadHeaderEntries();
+void delay(uint8_t ms);
 
-//sets 'cursor' in eeprom
-void setAddress(uint16_t addr)
-{
-  uint8_t timeout = 0;
-
-  g_write_data[0] = addr >> 8;
-  g_write_data[1] = addr & 0xFF;
-  HAL_Delay(10);
-  ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), g_write_data, 2, HAL_MAX_DELAY);
-
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-
-  for (timeout = 0; i2c01->State != HAL_I2C_STATE_READY && timeout < WRITE_TIMEOUT; timeout++)
-  {
-    //Wait for the send to stop
-  }
-
-  if (timeout > WRITE_TIMEOUT)
-  {
-    errorFound(COM_TIMEOUT);
-  }
-}
-
-//reads single byte
-uint8_t readByte(uint16_t addr)
-{
-  uint8_t value;
-
-  setAddress(addr);
-
-  ret = HAL_I2C_Master_Receive(i2c01, SET_ADDRESS(g_device_addr, READ_ENABLE), &value, 1, HAL_MAX_DELAY);
-
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-
-  HAL_Delay(5);
-  return value;
-}
 
 //reads chunk of data
 void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
 {
-  setAddress(from_addr);
-  HAL_Delay(5);
-  ret = HAL_I2C_Master_Receive(i2c01, SET_ADDRESS(g_device_addr, READ_ENABLE), to_addr, size, HAL_MAX_DELAY);
+  uint8_t ret = 0;
 
-  if (ret != HAL_OK)
+  // set cursor
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2, PHAL_I2C_MODE_TX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(from_addr >> 8);   // High
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(from_addr & 0xFF); // Low
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
+  if (!ret) errorFound(COM_ERROR);
+
+  while(size > 0xFF) // can only receive 255 at a time
   {
-    errorFound(COM_ERROR);
+    ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, READ_ENABLE), 0xFF, PHAL_I2C_MODE_RX);
+    if (!ret) errorFound(COM_ERROR);
+    ret = PHAL_I2C_read_multi(to_addr, 0xFF);
+    if (!ret) errorFound(COM_ERROR);
+    ret = PHAL_I2C_gen_stop();
+    if (!ret) errorFound(COM_ERROR);
+    size -= 0xFF;
+    to_addr += 0xFF;
   }
+
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, READ_ENABLE), (uint8_t) size, PHAL_I2C_MODE_RX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_read_multi(to_addr, (uint8_t) size);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
+  if (!ret) errorFound(COM_ERROR);
+
 }
 
 //writes single byte
 void uploadByte(uint16_t addr, uint8_t val)
 {
-  g_write_data[0] = addr >> 8;
-  g_write_data[1] = addr & 0xFF;
-  g_write_data[2] = val;
+  uint8_t ret = 0;
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 3, PHAL_I2C_MODE_TX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(addr >> 8);   // High Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(addr & 0xFF); // Low Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(val);         // Data
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
 
-  uint8_t timeout = 0;
-  HAL_Delay(5); //Was not working without a delay...
-  ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), g_write_data, 3, HAL_MAX_DELAY);
-
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-  for (timeout = 0; i2c01->State != HAL_I2C_STATE_READY && timeout < WRITE_TIMEOUT; timeout++)
-  {
-    //Wait for the send to stop
-  }
-  if (timeout > WRITE_TIMEOUT)
-  {
-    errorFound(COM_TIMEOUT);
-  }
 }
 
 //uploads chunk ignoring page breaks
 void eUploadRaw(void *from_addr, uint16_t to_addr, uint16_t size)
 {
-  HAL_Delay(5);
-  //ret = HAL_I2C_Master_Transmit(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), from_addr, size, HAL_MAX_DELAY);
-  ret = HAL_I2C_Mem_Write(i2c01, SET_ADDRESS(g_device_addr, WRITE_ENABLE), to_addr, I2C_MEMADD_SIZE_16BIT, from_addr, size, HAL_MAX_DELAY);
+  uint8_t ret = 0;
 
-  if (ret != HAL_OK)
-  {
-    errorFound(COM_ERROR);
-  }
-
-  uint8_t timeout = 0;
-  for (timeout = 0; i2c01->State != HAL_I2C_STATE_READY && timeout < WRITE_TIMEOUT; timeout++)
-  {
-    //Wait for the send to stop
-  }
-
-  if (timeout > WRITE_TIMEOUT)
-  {
-    errorFound(COM_TIMEOUT);
-  }
+  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2 + size, PHAL_I2C_MODE_TX);
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(to_addr >> 8);          // High Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write(to_addr & 0xFF);        // Low Addr
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_write_multi(from_addr, size); // Data
+  if (!ret) errorFound(COM_ERROR);
+  ret = PHAL_I2C_gen_stop();
+  if (!ret) errorFound(COM_ERROR);
 
 }
 
 //breaks data into chunks to prevent crossing page boundary
-void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size)
+void uploadChunkBlocking(void *from_addr, uint16_t to_addr, uint16_t size)
 {
   uint16_t next_boundary = (to_addr / PAGE_SIZE + 1) * PAGE_SIZE;
   uint16_t current_addr = to_addr;
@@ -159,24 +120,69 @@ void uploadChunk(void *from_addr, uint16_t to_addr, uint16_t size)
       chunkSize = next_boundary - current_addr;
     }
 
+    delay(E_DELAY);
     eUploadRaw(from + (current_addr - to_addr), current_addr, chunkSize);
-    HAL_Delay(5);
+
     current_addr += chunkSize;
     next_boundary = (current_addr / PAGE_SIZE + 1) * PAGE_SIZE;
   } while (current_addr < end_loc);
 }
 
-//transfers all values to given huart
-void eepromDump(UART_HandleTypeDef huart)
+//breaks data into chunks to prevent crossing page boundary
+uint8_t uploadChunkPeriodic(void *from_addr, uint16_t to_addr, uint16_t size)
 {
-  uint8_t MSG[PAGE_SIZE + 1] = {0};
-  for (uint16_t i = 0; i < g_eeprom_size; i += PAGE_SIZE)
+  if (!e_wr_stat.has_write_started)
   {
-    downloadChunk(i, MSG, PAGE_SIZE);
-    HAL_UART_Transmit(&huart, MSG, sizeof(MSG) - 1, 100);
-    HAL_Delay(10);
+    e_wr_stat.has_write_started = 1;
+    e_wr_stat.is_write_complete = 0;
+    e_wr_stat.next_boundary = (to_addr / PAGE_SIZE + 1) * PAGE_SIZE;
+    e_wr_stat.current_addr = to_addr;
+    e_wr_stat.end_loc = to_addr + (size - 1);
+    e_wr_stat.from = from_addr;
+  }
+
+  uint8_t chunkSize; //number of bytes copying from mem
+
+  //send from current to boundary or end loc, whichever is less
+  if (e_wr_stat.end_loc - e_wr_stat.current_addr < 
+      e_wr_stat.next_boundary - e_wr_stat.current_addr)
+  {
+    chunkSize = e_wr_stat.end_loc - e_wr_stat.current_addr + 1;
+  }
+  else
+  {
+    chunkSize = e_wr_stat.next_boundary - e_wr_stat.current_addr;
+  }
+
+  eUploadRaw(e_wr_stat.from + (e_wr_stat.current_addr - to_addr), e_wr_stat.current_addr, chunkSize);
+
+  e_wr_stat.current_addr += chunkSize;
+  e_wr_stat.next_boundary = (e_wr_stat.current_addr / PAGE_SIZE + 1) * PAGE_SIZE;
+
+  if (e_wr_stat.current_addr < e_wr_stat.end_loc)
+  {
+    return false;
+  }
+  else
+  {
+    e_wr_stat.is_write_complete = 1;
+    e_wr_stat.has_write_started = 0;
+    return true;
   }
 }
+
+//transfers all values to given huart
+// TODO: PHAL UART Library
+// void eepromDump(UART_HandleTypeDef huart)
+// {
+//   uint8_t MSG[PAGE_SIZE + 1] = {0};
+//   for (uint16_t i = 0; i < g_eeprom_size; i += PAGE_SIZE)
+//   {
+//     downloadChunk(i, MSG, PAGE_SIZE);
+//     //HAL_UART_Transmit(&huart, MSG, sizeof(MSG) - 1, 100);
+//     HAL_Delay(10);
+//   }
+// }
 
 //Sets all addresses to 0
 void eepromWipe()
@@ -185,7 +191,7 @@ void eepromWipe()
 
   for (uint16_t i = 0; i < g_eeprom_size; i += PAGE_SIZE)
   {
-    uploadChunk(data, i, 32);
+    uploadChunkBlocking(data, i, 32);
   }
 }
 
@@ -212,6 +218,7 @@ void addHeaderEntry(header_t *new_header)
   new_header->address_on_eeprom = eepromMalloc(new_header->size);
 
   g_numStructs += 1;
+  delay(E_DELAY); // minimum 5 ms between writing
   uploadByte(0, g_numStructs); //increment struct num by 1
 
   if (g_numStructs > MAX_HEADER_COUNT)
@@ -219,7 +226,7 @@ void addHeaderEntry(header_t *new_header)
     errorFound(MAX_HEADER);
   }
 
-  uploadChunk(new_header, (g_numStructs - 1) * HEADER_SIZE + 1, HEADER_SIZE);
+  uploadChunkBlocking(new_header, (g_numStructs - 1) * HEADER_SIZE + 1, HEADER_SIZE);
 
   sortHeaders(); //added new item, put it in place
 }
@@ -240,7 +247,7 @@ void updateHeaderEntry(header_t *header)
     if (strncmp(name_found, header->name, NAME_SIZE) == 0)
     {
       //found the correct header to update
-      uploadChunk(header_loc + NAME_SIZE, i * HEADER_SIZE + 1 + NAME_SIZE, HEADER_SIZE - NAME_SIZE);
+      uploadChunkBlocking(header_loc + NAME_SIZE, i * HEADER_SIZE + 1 + NAME_SIZE, HEADER_SIZE - NAME_SIZE);
       return;
     }
   }
@@ -290,7 +297,7 @@ uint8_t eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version,
     a_header->ptr_to_data = ptr; //link :D
 
     addHeaderEntry(a_header); //update eAddress too
-    uploadChunk(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
+    uploadChunkBlocking(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
   }
   else if (a_header->size != size || a_header->version != version)
   {
@@ -312,7 +319,7 @@ uint8_t eepromLinkStruct(void *ptr, uint16_t size, char name[], uint8_t version,
     a_header->ptr_to_data = ptr; //link :D
 
     updateHeaderEntry(a_header);
-    uploadChunk(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
+    uploadChunkBlocking(a_header->ptr_to_data, a_header->address_on_eeprom, a_header->size);
   }
   else if (overwrite_previous != overwrite_protection)
   {
@@ -437,13 +444,14 @@ void removeFromEeprom(char name[])
     if (strncmp(name_buffer, name, NAME_SIZE) == 0)
     {
       // found the correct header to update
-      uploadChunk(header_buffer, i * HEADER_SIZE + 1, HEADER_SIZE);
+      uploadChunkBlocking(header_buffer, i * HEADER_SIZE + 1, HEADER_SIZE);
       i = g_numStructs; // exit loop
     }
   }
 
   // decrement num g_headers
   g_numStructs -= 1;
+  delay(E_DELAY); // minimum 5 ms delay between write cycles
   uploadByte(0, g_numStructs);
 }
 
@@ -470,13 +478,12 @@ void eepromCleanHeaders()
 }
 
 //loads current header info
-void eepromInitialize(I2C_HandleTypeDef *i2c, uint16_t eepromSpace, uint8_t address)
+void eepromInitialize(uint16_t eepromSpace, uint8_t address)
 {
-  i2c01 = i2c;
   g_eeprom_size = eepromSpace;
   g_device_addr = address;
 
-  g_numStructs = readByte(0);
+  downloadChunk(0x00, &g_numStructs, 1);
 
   loadHeaderEntries();
   sortHeaders();
@@ -502,7 +509,7 @@ uint8_t eepromLoadStruct(char name[])
 }
 
 //saves struct to mem, returns 1 if unknown struct
-uint8_t eepromSaveStruct(char name[])
+uint8_t eepromSaveStructBlocking(char name[])
 {
 
   for (int i = 0; i < g_numStructs; i++)
@@ -510,7 +517,24 @@ uint8_t eepromSaveStruct(char name[])
     if (strncmp(name, g_headers[i].name, NAME_SIZE) == 0)
     {
       //found desired node
-      uploadChunk(g_headers[i].ptr_to_data, g_headers[i].address_on_eeprom, g_headers[i].size);
+      uploadChunkBlocking(g_headers[i].ptr_to_data, g_headers[i].address_on_eeprom, g_headers[i].size);
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+//saves struct to mem, returns 1 if unknown struct, call until eeprom is_write_complete = 1
+uint8_t eepromSaveStructPeriodic(char name[])
+{
+
+  for (int i = 0; i < g_numStructs; i++)
+  {
+    if (strncmp(name, g_headers[i].name, NAME_SIZE) == 0)
+    {
+      //found desired node
+      uploadChunkPeriodic(g_headers[i].ptr_to_data, g_headers[i].address_on_eeprom, g_headers[i].size);
       return 0;
     }
   }
@@ -531,6 +555,15 @@ void combineVersion(uint8_t *version, uint8_t *overwrite)
   *version = *version | (*overwrite << OVERWRITE_BIT);
 }
 
+void delay(uint8_t ms)
+{
+  uint32_t ticks = (SystemCoreClock / 1000) * ms / 4;
+  for(int i = 0; i < ticks; i++)
+  {
+    __asm__("nop");
+  }
+}
+
 void errorFound(eeprom_error_t error)
 {
   switch (error)
@@ -542,6 +575,7 @@ void errorFound(eeprom_error_t error)
   case HEADER_NOT_FOUND:
     while (PER == GREAT)
     {
+      __asm__("nop");
     }
     break;
   }
