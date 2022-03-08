@@ -10,6 +10,7 @@ uint8_t g_numStructs; //number of entries in header
 
 uint16_t g_eeprom_size;
 uint8_t g_device_addr;
+I2C_TypeDef *g_eeprom_i2c;
 
 void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size);
 void uploadByte(uint16_t addr, uint8_t val);
@@ -35,22 +36,22 @@ void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
   uint8_t ret = 0;
 
   // set cursor
-  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2, PHAL_I2C_MODE_TX);
+  ret = PHAL_I2C_gen_start(g_eeprom_i2c, SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2, PHAL_I2C_MODE_TX);
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write(from_addr >> 8);   // High
+  ret = PHAL_I2C_write(g_eeprom_i2c, from_addr >> 8);   // High
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write(from_addr & 0xFF); // Low
+  ret = PHAL_I2C_write(g_eeprom_i2c, from_addr & 0xFF); // Low
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_gen_stop();
+  ret = PHAL_I2C_gen_stop(g_eeprom_i2c);
   if (!ret) errorFound(COM_ERROR);
 
   while(size > 0xFF) // can only receive 255 at a time
   {
-    ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, READ_ENABLE), 0xFF, PHAL_I2C_MODE_RX);
+    ret = PHAL_I2C_gen_start(g_eeprom_i2c, SET_ADDRESS(g_device_addr, READ_ENABLE), 0xFF, PHAL_I2C_MODE_RX);
     if (!ret) errorFound(COM_ERROR);
-    ret = PHAL_I2C_read_multi(to_addr, 0xFF);
+    ret = PHAL_I2C_read_multi(g_eeprom_i2c, to_addr, 0xFF);
     if (!ret) errorFound(COM_ERROR);
-    ret = PHAL_I2C_gen_stop();
+    ret = PHAL_I2C_gen_stop(g_eeprom_i2c);
     if (!ret) errorFound(COM_ERROR);
     size -= 0xFF;
     to_addr += 0xFF;
@@ -58,9 +59,9 @@ void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
 
   ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, READ_ENABLE), (uint8_t) size, PHAL_I2C_MODE_RX);
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_read_multi(to_addr, (uint8_t) size);
+  ret = PHAL_I2C_read_multi(g_eeprom_i2c, to_addr, (uint8_t) size);
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_gen_stop();
+  ret = PHAL_I2C_gen_stop(g_eeprom_i2c);
   if (!ret) errorFound(COM_ERROR);
 
 }
@@ -69,15 +70,15 @@ void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
 void uploadByte(uint16_t addr, uint8_t val)
 {
   uint8_t ret = 0;
-  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 3, PHAL_I2C_MODE_TX);
+  ret = PHAL_I2C_gen_start(g_eeprom_i2c, SET_ADDRESS(g_device_addr, WRITE_ENABLE), 3, PHAL_I2C_MODE_TX);
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write(addr >> 8);   // High Addr
+  ret = PHAL_I2C_write(g_eeprom_i2c, addr >> 8);   // High Addr
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write(addr & 0xFF); // Low Addr
+  ret = PHAL_I2C_write(g_eeprom_i2c, addr & 0xFF); // Low Addr
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write(val);         // Data
+  ret = PHAL_I2C_write(g_eeprom_i2c, val);         // Data
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_gen_stop();
+  ret = PHAL_I2C_gen_stop(g_eeprom_i2c);
 
 }
 
@@ -86,15 +87,15 @@ void eUploadRaw(void *from_addr, uint16_t to_addr, uint16_t size)
 {
   uint8_t ret = 0;
 
-  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2 + size, PHAL_I2C_MODE_TX);
+  ret = PHAL_I2C_gen_start(g_eeprom_i2c, SET_ADDRESS(g_device_addr, WRITE_ENABLE), 2 + size, PHAL_I2C_MODE_TX);
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write(to_addr >> 8);          // High Addr
+  ret = PHAL_I2C_write(g_eeprom_i2c, to_addr >> 8);          // High Addr
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write(to_addr & 0xFF);        // Low Addr
+  ret = PHAL_I2C_write(g_eeprom_i2c, to_addr & 0xFF);        // Low Addr
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_write_multi(from_addr, size); // Data
+  ret = PHAL_I2C_write_multi(g_eeprom_i2c, from_addr, size); // Data
   if (!ret) errorFound(COM_ERROR);
-  ret = PHAL_I2C_gen_stop();
+  ret = PHAL_I2C_gen_stop(g_eeprom_i2c);
   if (!ret) errorFound(COM_ERROR);
 
 }
@@ -417,7 +418,7 @@ uint16_t eepromMalloc(uint16_t size)
     }
 
     errorFound(MAX_MEM);
-    return NULL; //no space available
+    return 0; //no space available
   }
   else
   {
@@ -478,10 +479,11 @@ void eepromCleanHeaders()
 }
 
 //loads current header info
-void eepromInitialize(uint16_t eepromSpace, uint8_t address)
+void eepromInitialize(uint16_t eepromSpace, uint8_t address, I2C_TypeDef *i2c)
 {
   g_eeprom_size = eepromSpace;
   g_device_addr = address;
+  g_eeprom_i2c = i2c;
 
   downloadChunk(0x00, &g_numStructs, 1);
 

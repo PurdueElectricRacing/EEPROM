@@ -100,7 +100,7 @@ uint8_t eepromLinkStruct(void* ptr, uint16_t size, char name[], uint8_t version,
  * @param eepromSpace byte capacity of eeprom
  * @param address     I2C address
  */
-void eepromInitialize(uint16_t eepromSpace, uint8_t address);
+void eepromInitialize(uint16_t eepromSpace, uint8_t address, I2C_TypeDef *i2c);
 
 /**
  * @brief call after linking structs, removes old structs from memory with 
