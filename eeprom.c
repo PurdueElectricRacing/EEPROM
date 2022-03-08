@@ -57,7 +57,7 @@ void downloadChunk(uint16_t from_addr, void *to_addr, uint16_t size)
     to_addr += 0xFF;
   }
 
-  ret = PHAL_I2C_gen_start(SET_ADDRESS(g_device_addr, READ_ENABLE), (uint8_t) size, PHAL_I2C_MODE_RX);
+  ret = PHAL_I2C_gen_start(g_eeprom_i2c, SET_ADDRESS(g_device_addr, READ_ENABLE), (uint8_t) size, PHAL_I2C_MODE_RX);
   if (!ret) errorFound(COM_ERROR);
   ret = PHAL_I2C_read_multi(g_eeprom_i2c, to_addr, (uint8_t) size);
   if (!ret) errorFound(COM_ERROR);
