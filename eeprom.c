@@ -575,7 +575,7 @@ void errorFound(eeprom_error_t error)
   case MAX_HEADER:
   case MAX_MEM:
   case HEADER_NOT_FOUND:
-    while (PER == GREAT)
+    while (1)
     {
       __asm__("nop");
     }
