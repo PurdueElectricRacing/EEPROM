@@ -10,10 +10,6 @@
 
 #include "common/phal_L4/i2c/i2c.h"
 
-//I was told this was required:
-#define PER 1
-#define GREAT PER
-
 //#define DEVICE_ADDR 0x50 //Before Bit Shifting
 
 //writing
