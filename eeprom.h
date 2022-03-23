@@ -134,4 +134,6 @@ uint8_t eepromSaveStructBlocking(char name[]);
 uint8_t eepromSaveStructPeriodic(char name[]);
 
 
+void errorFound(eeprom_error_t error) __attribute__((weak));
+
 #endif

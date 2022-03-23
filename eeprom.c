@@ -25,7 +25,6 @@ uint16_t eepromMalloc(uint16_t size);
 void removeFromEeprom(char name[]);
 void splitVersion(uint8_t *version, uint8_t *overwrite);
 void combineVersion(uint8_t *version, uint8_t *overwrite);
-void errorFound(eeprom_error_t error);
 void loadHeaderEntries();
 void delay(uint8_t ms);
 
@@ -563,22 +562,5 @@ void delay(uint8_t ms)
   for(int i = 0; i < ticks; i++)
   {
     __asm__("nop");
-  }
-}
-
-void errorFound(eeprom_error_t error)
-{
-  switch (error)
-  {
-  case COM_TIMEOUT:
-  case COM_ERROR:
-  case MAX_HEADER:
-  case MAX_MEM:
-  case HEADER_NOT_FOUND:
-    while (1)
-    {
-      __asm__("nop");
-    }
-    break;
   }
 }
